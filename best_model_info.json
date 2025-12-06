@@ -1,0 +1,11 @@
+{
+    "embedding_model": "xlmr",
+    "classifier": "CatBoost",
+    "metrics": {
+        "accuracy": 0.8562382125796726,
+        "f1_score": 0.7739362354386573,
+        "precision": 0.7435831108715709,
+        "recall": 0.8360626826320338
+    },
+    "model_file": "xlmr_CatBoost.joblib"
+}
