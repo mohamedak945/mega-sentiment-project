@@ -9,7 +9,7 @@ joblib==1.3.2
 torch==2.1.0
 transformers==4.35.0
 sentencepiece==0.1.99
-tokenizers==0.15.1
+tokenizers>=0.14,<0.15  # CHANGED: Remove exact version
 accelerate==0.25.0
 datasets==2.16.1
 
@@ -22,56 +22,34 @@ catboost==1.2.5
 matplotlib==3.8.2
 seaborn==0.13.0
 plotly==5.18.0
-wordcloud==1.9.3
 
 # Model Interpretation
 shap==0.44.1
-lime==0.2.0.1
-eli5==0.13.0
 
 # Experiment Tracking
 mlflow==2.11.3
-wandb==0.16.2
-tensorboard==2.15.1
-tensorboardX==2.6.2.2
 
 # Web Deployment
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 streamlit==1.28.1
-gradio==4.12.0
 
 # API & Web Utilities
 pydantic==2.5.0
 python-multipart==0.0.6
-httpx==0.25.2
 requests==2.31.0
-aiofiles==23.2.1
 
-# Text Processing & NLP
+# Text Processing
 nltk==3.8.1
-spacy==3.7.2
-textblob==0.17.1
-gensim==4.3.2
 emoji==2.10.0
 beautifulsoup4==4.12.2
 
-# Utilities & Helpers
+# Utilities
 tqdm==4.66.1
 pyyaml==6.0.1
 python-dotenv==1.0.0
-colorama==0.4.6
 rich==13.7.0
-loguru==0.7.2
 
-# Development & Testing
-pytest==7.4.3
-black==23.11.0
-flake8==6.1.0
-jupyter==1.0.0
-ipython==8.18.1
-
-# Optional: For specific transformer models
+# Optional
 safetensors==0.4.1
-protobuf==4.25.1
 huggingface-hub==0.20.2
