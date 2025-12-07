@@ -3,7 +3,14 @@ import joblib
 import json
 import torch
 import numpy as np
+
 from transformers import AutoModel, AutoTokenizer
+
+# Clear ALL caches to force reload with new numpy
+st.cache_data.clear()
+st.cache_resource.clear()
+
+
 
 # Load model once
 @st.cache_resource
