@@ -3,8 +3,6 @@ import joblib
 import json
 import torch
 import numpy as np
-import pandas as pd
-import gc
 from transformers import AutoModel, AutoTokenizer
 
 # ============================================
@@ -17,48 +15,34 @@ st.set_page_config(
 )
 
 # ============================================
-# LOAD MODELS WITH MEMORY OPTIMIZATION
+# LOAD MODELS (EXACTLY LIKE YOUR API)
 # ============================================
 
-@st.cache_resource(show_spinner=False, max_entries=1)
-def load_config():
-    """Load model configuration"""
+@st.cache_resource
+def load_models():
+    """Load all models exactly like your API does"""
+    print("Loading sentiment analysis model...")
+    
+    # 1. Load config
     with open('artifacts/models/best_model_info.json', 'r') as f:
         config = json.load(f)
-    return config
-
-@st.cache_resource(show_spinner=False, max_entries=1)
-def load_classifier():
-    """Load classifier model with memory optimization"""
-    config = load_config()
+    
+    print(f"Model: {config['classifier']} on {config['embedding_model']}")
+    print(f"🎯 Accuracy: {config['metrics']['accuracy']:.4f}")
+    
+    # 2. Load classifier
     model_path = f"artifacts/models/{config['embedding_model']}_{config['classifier']}.joblib"
-    
-    # Clear memory before loading
-    gc.collect()
-    
-    # Load classifier
     classifier = joblib.load(model_path)
-    
-    # DEBUG: Print classifier info
-    print("=" * 50)
-    print("CLASSIFIER DEBUG INFO:")
-    print(f"Classifier type: {type(classifier)}")
-    if hasattr(classifier, 'classes_'):
-        print(f"Classifier classes: {classifier.classes_}")
-        print(f"Number of classes: {len(classifier.classes_)}")
-    print("=" * 50)
-    
-    # Clear memory after loading
-    gc.collect()
+    print(f"Model loaded from {model_path}")
     
     return classifier, config
 
-@st.cache_resource(show_spinner=False, max_entries=1)
-def get_tokenizer_and_model():
-    """Load tokenizer and model with memory optimization"""
-    config = load_config()
+@st.cache_resource
+def get_embedding_model():
+    """Get embedding model and tokenizer"""
+    config = load_models()[1]
     
-    # Map embedding names to model names
+    # Map embedding names (EXACTLY like your API)
     model_mapping = {
         'bert': 'bert-base-uncased',
         'distilbert': 'distilbert-base-uncased',
@@ -67,57 +51,34 @@ def get_tokenizer_and_model():
     
     embedding_model_name = model_mapping.get(config['embedding_model'], 'xlm-roberta-base')
     
-    # Clear memory before loading
-    gc.collect()
+    tokenizer = AutoTokenizer.from_pretrained(embedding_model_name)
+    model = AutoModel.from_pretrained(embedding_model_name)
     
-    try:
-        # Load tokenizer
-        tokenizer = AutoTokenizer.from_pretrained(
-            embedding_model_name,
-            use_fast=True  # Fast tokenizer uses less memory
-        )
-        
-        # Force CPU usage to save memory
-        device = torch.device("cpu")
-        
-        # Try loading with accelerate, fallback to standard loading
-        try:
-            # Option 1: With accelerate for low memory usage
-            model = AutoModel.from_pretrained(
-                embedding_model_name,
-                torch_dtype=torch.float32,
-                low_cpu_mem_usage=True,
-                device_map="cpu"
-            )
-        except:
-            # Option 2: Standard loading without accelerate features
-            model = AutoModel.from_pretrained(
-                embedding_model_name,
-                torch_dtype=torch.float32
-            )
-            model = model.to(device)
-        
-        # Disable gradients and set to eval mode
-        model.eval()
-        for param in model.parameters():
-            param.requires_grad = False
-        
-        # Clear memory after loading
-        gc.collect()
-        
-        return tokenizer, model, device, config
-        
-    except Exception as e:
-        st.error(f"Error loading model: {str(e)}")
-        # Return None values to prevent crash
-        return None, None, None, config
+    # Device selection (EXACTLY like your API)
+    def select_device():
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+            print("GPU Nvidia cuda will be our device")
+        elif torch.backends.mps.is_available():
+            device = torch.device("mps")
+            print("Apple Silicon Chip will be our device")
+        else:
+            device = torch.device("cpu")
+            print("CPU will be our device")
+        return device
+    
+    device = select_device()
+    model.to(device)
+    model.eval()
+    
+    return tokenizer, model, device, embedding_model_name
 
 # ============================================
-# EMBEDDING FUNCTION
+# EMBEDDING FUNCTION (EXACTLY LIKE YOUR API)
 # ============================================
 
 def get_embedding(text: str, tokenizer, model, device):
-    """Convert text to embedding vector"""
+    """Convert text to embedding vector - EXACT copy from your API"""
     inputs = tokenizer(
         text,
         max_length=256,
@@ -135,56 +96,59 @@ def get_embedding(text: str, tokenizer, model, device):
     return embedding.cpu().numpy()
 
 # ============================================
-# CALLBACK FUNCTIONS FOR EXAMPLE BUTTONS
+# PREDICTION FUNCTION (EXACTLY LIKE YOUR API)
 # ============================================
 
-def set_positive_example():
-    """Callback for positive example button"""
-    st.session_state.text_input = "This product is absolutely amazing! I've never been happier with a purchase. The quality is outstanding and it exceeded all my expectations."
-    st.rerun()
-
-def set_negative_example():
-    """Callback for negative example button"""
-    st.session_state.text_input = "I'm very disappointed with this service. The quality is poor and it doesn't work as advertised. Would not recommend to anyone."
-    st.rerun()
+def predict_sentiment(text: str):
+    """Make prediction exactly like your API /predict endpoint"""
+    try:
+        # Load models
+        classifier, config = load_models()
+        tokenizer, model, device, embedding_model_name = get_embedding_model()
+        
+        # Generate embedding
+        embedding = get_embedding(text, tokenizer, model, device)
+        
+        # Make prediction
+        prediction = classifier.predict(embedding)[0]
+        probabilities = classifier.predict_proba(embedding)[0]
+        confidence = float(max(probabilities))
+        
+        # DEBUG: Show raw values
+        print(f"DEBUG - Text: {text}")
+        print(f"DEBUG - Prediction: {prediction}")
+        print(f"DEBUG - Probabilities: {probabilities}")
+        print(f"DEBUG - Confidence: {confidence}")
+        
+        # Check if classifier has classes_ attribute
+        if hasattr(classifier, 'classes_'):
+            print(f"DEBUG - Classifier classes: {classifier.classes_}")
+            print(f"DEBUG - Prediction maps to: {classifier.classes_[prediction]}")
+        
+        # THIS IS THE CRITICAL LINE FROM YOUR API
+        sentiment = "positive" if prediction == 1 else "negative"
+        
+        return {
+            "text": text,
+            "sentiment": sentiment,
+            "confidence": confidence,
+            "label": int(prediction),
+            "probabilities": probabilities.tolist()
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
 
 # ============================================
-# MAIN APP WITH DEBUG OUTPUT
+# MAIN APP
 # ============================================
 
 def main():
-    # HEADER
     st.title("🧠 Sentiment Analysis")
     
-    # Initialize session state for text input if not exists
+    # Initialize session state
     if 'text_input' not in st.session_state:
         st.session_state.text_input = ""
-    
-    # DEBUG SIDEBAR
-    with st.sidebar:
-        st.subheader("Debug Info")
-        debug_mode = st.checkbox("Show Debug Info", value=False)
-        
-        if st.button("Test Model"):
-            # Quick test
-            test_texts = [
-                "I love this! It's amazing!",
-                "This is terrible, worst product ever.",
-                "It's okay, nothing special."
-            ]
-            
-            classifier, config = load_classifier()
-            tokenizer, model, device, _ = get_tokenizer_and_model()
-            
-            for test_text in test_texts:
-                embedding = get_embedding(test_text, tokenizer, model, device)
-                pred = classifier.predict(embedding)[0]
-                proba = classifier.predict_proba(embedding)[0]
-                
-                st.write(f"**Text:** {test_text}")
-                st.write(f"Prediction: {pred}")
-                st.write(f"Probabilities: {proba}")
-                st.write("---")
     
     # Create two columns
     col_left, col_right = st.columns([2, 1])
@@ -214,20 +178,14 @@ def main():
             col_ex1, col_ex2 = st.columns(2)
             
             with col_ex1:
-                st.button(
-                    "Positive Example",
-                    on_click=set_positive_example,
-                    use_container_width=True,
-                    key="btn_positive"
-                )
+                if st.button("Positive Example", use_container_width=True, key="btn_positive"):
+                    st.session_state.text_input = "This product is absolutely amazing! I've never been happier with a purchase."
+                    st.rerun()
             
             with col_ex2:
-                st.button(
-                    "Negative Example",
-                    on_click=set_negative_example,
-                    use_container_width=True,
-                    key="btn_negative"
-                )
+                if st.button("Negative Example", use_container_width=True, key="btn_negative"):
+                    st.session_state.text_input = "I'm very disappointed with this service. The quality is poor."
+                    st.rerun()
     
     with col_right:
         # RESULTS DISPLAY
@@ -235,124 +193,91 @@ def main():
         
         if analyze_button and text_input.strip():
             try:
-                # Show loading spinner
                 with st.spinner("Analyzing sentiment..."):
-                    # Load models (cached)
-                    classifier, config = load_classifier()
-                    tokenizer, model, device, _ = get_tokenizer_and_model()
+                    # Get prediction (EXACTLY like your API)
+                    result = predict_sentiment(text_input)
                     
-                    # Check if models loaded successfully
-                    if tokenizer is None or model is None:
-                        st.error("❌ Failed to load models.")
+                    if "error" in result:
+                        st.error(f"Error: {result['error']}")
                         st.stop()
-                    
-                    # Generate embedding
-                    embedding = get_embedding(text_input, tokenizer, model, device)
-                    
-                    # Make prediction
-                    prediction = classifier.predict(embedding)[0]
-                    probabilities = classifier.predict_proba(embedding)[0]
-                    
-                    # DEBUG OUTPUT
-                    print(f"\nDEBUG PREDICTION FOR: '{text_input[:50]}...'")
-                    print(f"Raw prediction value: {prediction}")
-                    print(f"Probabilities: {probabilities}")
-                    if hasattr(classifier, 'classes_'):
-                        print(f"Classifier classes: {classifier.classes_}")
-                    
-                    # FIX: Check what the model actually says
-                    # If classifier has classes_, use them
-                    if hasattr(classifier, 'classes_'):
-                        classes = classifier.classes_
-                        # Get the actual class label
-                        predicted_class = classes[prediction]
-                        print(f"Predicted class: {predicted_class}")
-                        
-                        # Convert to sentiment
-                        if isinstance(predicted_class, (int, np.integer)):
-                            # Numeric classes
-                            if predicted_class == 0:
-                                sentiment = "negative"
-                            elif predicted_class == 1:
-                                sentiment = "positive"
-                            else:
-                                sentiment = f"class_{predicted_class}"
-                        else:
-                            # String classes - check for sentiment indicators
-                            class_str = str(predicted_class).lower()
-                            if 'neg' in class_str or '0' in class_str:
-                                sentiment = "negative"
-                            elif 'pos' in class_str or '1' in class_str:
-                                sentiment = "positive"
-                            else:
-                                sentiment = class_str
-                    else:
-                        # No classes attribute - use probability threshold
-                        if probabilities[0] > probabilities[1]:
-                            sentiment = "negative"
-                            confidence = probabilities[0]
-                        else:
-                            sentiment = "positive"
-                            confidence = probabilities[1]
-                    
-                    confidence = float(max(probabilities))
-                    
-                    # Clear memory after prediction
-                    gc.collect()
                 
                 # DISPLAY RESULTS
-                if sentiment.lower() == "positive":
+                if result["sentiment"] == "positive":
                     st.success(f"✅ POSITIVE SENTIMENT")
-                elif sentiment.lower() == "negative":
-                    st.error(f"❌ NEGATIVE SENTIMENT")
                 else:
-                    st.warning(f"⚠️ {sentiment.upper()}")
+                    st.error(f"❌ NEGATIVE SENTIMENT")
                 
-                st.metric("Confidence", f"{confidence:.2%}")
+                st.metric("Confidence", f"{result['confidence']:.2%}")
+                st.metric("Label", result["label"])
                 
                 # Show probabilities
-                if len(probabilities) == 2:
+                if "probabilities" in result and len(result["probabilities"]) == 2:
                     col_prob1, col_prob2 = st.columns(2)
                     with col_prob1:
-                        st.metric("Negative Prob", f"{probabilities[0]:.2%}")
+                        st.metric("P(Negative)", f"{result['probabilities'][0]:.2%}")
                     with col_prob2:
-                        st.metric("Positive Prob", f"{probabilities[1]:.2%}")
+                        st.metric("P(Positive)", f"{result['probabilities'][1]:.2%}")
                 
-                # DEBUG INFO EXPANDER
-                if debug_mode:
-                    with st.expander("🔧 Debug Details"):
-                        st.write(f"**Raw prediction:** {prediction}")
-                        st.write(f"**Probabilities:** {probabilities}")
-                        st.write(f"**Interpreted sentiment:** {sentiment}")
-                        if hasattr(classifier, 'classes_'):
-                            st.write(f"**Model classes:** {classifier.classes_}")
-                        st.write(f"**Text analyzed:** {text_input}")
-                        st.write(f"**Embedding shape:** {embedding.shape}")
+                # DEBUG INFO
+                with st.expander("🔧 Debug Info"):
+                    st.write(f"**Raw prediction label:** {result['label']}")
+                    st.write(f"**Probabilities:** {result.get('probabilities', [])}")
+                    st.write(f"**Interpreted sentiment:** {result['sentiment']}")
+                    
+                    # Load classifier to show classes
+                    classifier, config = load_models()
+                    if hasattr(classifier, 'classes_'):
+                        st.write(f"**Model classes:** {classifier.classes_}")
+                        st.write(f"**Prediction maps to class:** {classifier.classes_[result['label']]}")
                     
             except Exception as e:
-                st.error(f"Error analyzing text: {str(e)}")
-                import traceback
-                st.code(traceback.format_exc())
+                st.error(f"Error: {str(e)}")
         
         elif analyze_button and not text_input.strip():
             st.warning("⚠️ Please enter some text to analyze!")
         else:
-            # PLACEHOLDER FOR RESULTS
-            st.info("Enter text and click 'Analyze Sentiment' to see results")
+            st.info("Enter text and click 'Analyze Sentiment'")
+
+# ============================================
+# TEST FUNCTION - ADD THIS
+# ============================================
+
+def test_model():
+    """Test the model with example texts"""
+    st.sidebar.subheader("Model Test")
+    
+    if st.sidebar.button("Run Test"):
+        test_texts = [
+            ("I love this product! It's amazing!", "positive"),
+            ("This is terrible, worst product ever.", "negative"),
+            ("It's okay, nothing special.", "neutral")
+        ]
+        
+        results = []
+        for text, expected in test_texts:
+            result = predict_sentiment(text)
+            results.append({
+                "text": text[:50] + "..." if len(text) > 50 else text,
+                "prediction": result.get("label", -1),
+                "sentiment": result.get("sentiment", "error"),
+                "expected": expected
+            })
+        
+        # Display results
+        import pandas as pd
+        df = pd.DataFrame(results)
+        st.sidebar.dataframe(df)
+        
+        # Check if predictions match expectations
+        correct = sum(1 for r in results if r["sentiment"] == r["expected"])
+        st.sidebar.write(f"Correct: {correct}/{len(results)}")
 
 # ============================================
 # APP ENTRY POINT
 # ============================================
 if __name__ == "__main__":
-    # Clear cache on startup
-    if 'cache_cleared' not in st.session_state:
-        try:
-            st.cache_resource.clear()
-            st.cache_data.clear()
-            gc.collect()
-            st.session_state.cache_cleared = True
-        except:
-            pass
+    # Add test function to sidebar
+    with st.sidebar:
+        test_model()
     
-    # Run main app
     main()
