@@ -1,242 +1,248 @@
-# serve_api.py - OPTIMIZED FOR RENDER.COM
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from fastapi.middleware.cors import CORSMiddleware
-import joblib
+# single_app.py - Streamlit app that calls the FastAPI service
+import streamlit as st
+import requests
 import json
-import torch
-import numpy as np
-from transformers import AutoModel, AutoTokenizer
-import os
-from pathlib import Path
+import pandas as pd
+import plotly.express as px
+from datetime import datetime
+import time
 
-app = FastAPI(
-    title="Sentiment Analysis API",
-    description="API for sentiment analysis using transformer models",
-    version="1.0.0"
+# Page configuration
+st.set_page_config(
+    page_title="Sentiment Analysis Dashboard",
+    page_icon="😊",
+    layout="wide"
 )
 
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Custom CSS
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        color: #1f77b4;
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+    .sentiment-positive {
+        color: green;
+        font-weight: bold;
+    }
+    .sentiment-negative {
+        color: red;
+        font-weight: bold;
+    }
+    .stButton>button {
+        width: 100%;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-print("🚀 Starting Sentiment Analysis API...")
+# Title
+st.markdown('<h1 class="main-header">📊 Sentiment Analysis Dashboard</h1>', unsafe_allow_html=True)
 
-# Initialize variables
-config = None
-classifier = None
-tokenizer = None
-model = None
-device = None
+# API Configuration
+API_URL = st.secrets.get("API_URL", "http://localhost:8000")  # Change this in production
 
-# Request model
-class TextRequest(BaseModel):
-    text: str
+# Initialize session state
+if 'history' not in st.session_state:
+    st.session_state.history = []
+if 'api_status' not in st.session_state:
+    st.session_state.api_status = None
 
-# Response model
-class SentimentResponse(BaseModel):
-    text: str
-    sentiment: str
-    confidence: float
-    label: int
-
-def load_models():
-    """Load all models on startup"""
-    global config, classifier, tokenizer, model, device
+# Sidebar
+with st.sidebar:
+    st.title("⚙️ Configuration")
     
-    try:
-        print("📁 Loading configuration...")
-        
-        # Check if running on Render (different file paths)
-        if os.path.exists('artifacts/models/best_model_info.json'):
-            config_path = 'artifacts/models/best_model_info.json'
-        elif os.path.exists('/opt/render/project/src/artifacts/models/best_model_info.json'):
-            config_path = '/opt/render/project/src/artifacts/models/best_model_info.json'
-        else:
-            raise FileNotFoundError("Config file not found")
-        
-        with open(config_path, 'r') as f:
-            config = json.load(f)
-        
-        print(f"✅ Config loaded: {config['classifier']} on {config['embedding_model']}")
-        
-        # Load classifier
-        model_mapping = {
-            'bert': 'bert-base-uncased',
-            'distilbert': 'distilbert-base-uncased',
-            'xlmr': 'xlm-roberta-base'
-        }
-        
-        embedding_name = model_mapping.get(config['embedding_model'], 'xlm-roberta-base')
-        
-        # Try multiple paths for model file
-        model_paths = [
-            f"artifacts/models/{config['embedding_model']}_{config['classifier']}.joblib",
-            f"/opt/render/project/src/artifacts/models/{config['embedding_model']}_{config['classifier']}.joblib",
-            f"models/{config['embedding_model']}_{config['classifier']}.joblib"
+    # API Health Check
+    st.subheader("API Status")
+    if st.button("Check API Health"):
+        try:
+            response = requests.get(f"{API_URL}/health", timeout=5)
+            if response.status_code == 200:
+                st.session_state.api_status = "✅ API is healthy"
+            else:
+                st.session_state.api_status = "❌ API is not responding"
+        except Exception as e:
+            st.session_state.api_status = f"❌ Connection failed: {str(e)}"
+    
+    if st.session_state.api_status:
+        st.info(st.session_state.api_status)
+    
+    # Clear history
+    if st.button("Clear History"):
+        st.session_state.history = []
+        st.rerun()
+    
+    st.divider()
+    
+    # About section
+    st.subheader("ℹ️ About")
+    st.info("""
+    This dashboard analyzes sentiment using:
+    - 🤖 Transformer models (XLMR)
+    - 📊 CatBoost classifier
+    - ⚡ FastAPI backend
+    """)
+
+# Main content
+tab1, tab2, tab3 = st.tabs(["🔍 Analyze", "📈 History", "📊 Statistics"])
+
+with tab1:
+    # Text input
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        text_input = st.text_area(
+            "Enter text to analyze:",
+            placeholder="Type or paste your text here...",
+            height=150
+        )
+    
+    with col2:
+        st.markdown("### Examples")
+        examples = [
+            "I love this product! It's amazing!",
+            "This is the worst experience I've ever had.",
+            "The service was okay, nothing special.",
+            "Absolutely terrible customer support!"
         ]
         
-        model_path = None
-        for path in model_paths:
-            if os.path.exists(path):
-                model_path = path
-                break
-        
-        if not model_path:
-            raise FileNotFoundError(f"Model file not found. Tried: {model_paths}")
-        
-        print(f"📦 Loading classifier from {model_path}...")
-        classifier = joblib.load(model_path)
-        
-        # Load transformer model
-        print(f"🤖 Loading transformer model: {embedding_name}...")
-        tokenizer = AutoTokenizer.from_pretrained(embedding_name)
-        model = AutoModel.from_pretrained(embedding_name)
-        
-        # Device selection
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"⚙️  Using device: {device}")
-        
-        model.to(device)
-        model.eval()
-        
-        print("✅ All models loaded successfully!")
-        
-    except Exception as e:
-        print(f"❌ Error loading models: {e}")
-        # Fallback to a simpler model
-        setup_fallback_model()
-
-def setup_fallback_model():
-    """Setup a fallback using Hugging Face pipeline"""
-    global config, classifier
-    print("⚠️  Setting up fallback model...")
+        for example in examples:
+            if st.button(example[:40] + "..." if len(example) > 40 else example, 
+                        key=f"example_{examples.index(example)}"):
+                st.session_state.example_text = example
+                st.rerun()
     
-    from transformers import pipeline
-    classifier = pipeline("sentiment-analysis", 
-                         model="distilbert-base-uncased-finetuned-sst-2-english")
-    config = {
-        "classifier": "transformers_pipeline",
-        "embedding_model": "distilbert",
-        "metrics": {"accuracy": 0.91}
-    }
-    print("✅ Fallback model ready")
-
-def get_embedding(text: str):
-    """Convert text to embedding vector"""
-    global tokenizer, model, device
+    # If example was clicked
+    if 'example_text' in st.session_state:
+        text_input = st.session_state.example_text
+        del st.session_state.example_text
     
-    if tokenizer is None or model is None:
-        # Use fallback
-        return None
-    
-    try:
-        inputs = tokenizer(
-            text,
-            max_length=256,
-            padding='max_length',
-            truncation=True,
-            return_tensors='pt'
-        )
-        
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-        
-        with torch.no_grad():
-            outputs = model(**inputs)
-            embedding = outputs.last_hidden_state.mean(dim=1)
-        
-        return embedding.cpu().numpy()
-    except Exception as e:
-        print(f"Embedding error: {e}")
-        return None
-
-# Load models on startup
-@app.on_event("startup")
-async def startup_event():
-    load_models()
-
-# API endpoints
-@app.get("/")
-async def home():
-    return {
-        "message": "Sentiment Analysis API",
-        "status": "running",
-        "model": f"{config['classifier']} on {config['embedding_model']}" if config else "fallback",
-        "accuracy": config['metrics']['accuracy'] if config else 0.91,
-        "endpoints": {
-            "GET /": "This info",
-            "POST /predict": "Analyze sentiment",
-            "GET /health": "Health check"
-        }
-    }
-
-@app.get("/health")
-async def health_check():
-    return {
-        "status": "healthy",
-        "models_loaded": classifier is not None,
-        "config_loaded": config is not None
-    }
-
-@app.post("/predict", response_model=SentimentResponse)
-async def predict(request: TextRequest):
-    try:
-        text = request.text.strip()
-        
-        if not text:
-            raise HTTPException(status_code=400, detail="Text cannot be empty")
-        
-        # Check if using fallback model
-        if hasattr(classifier, 'predict'):
-            # Original model flow
-            embedding = get_embedding(text)
-            
-            if embedding is None:
-                raise HTTPException(status_code=503, detail="Model temporarily unavailable")
-            
-            prediction = classifier.predict(embedding)[0]
-            probabilities = classifier.predict_proba(embedding)[0]
-            confidence = float(max(probabilities))
-            sentiment = "positive" if prediction == 1 else "negative"
-            
+    # Analyze button
+    if st.button("🚀 Analyze Sentiment", type="primary"):
+        if text_input:
+            with st.spinner("Analyzing sentiment..."):
+                try:
+                    # Call FastAPI
+                    response = requests.post(
+                        f"{API_URL}/predict",
+                        json={"text": text_input},
+                        timeout=10
+                    )
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        
+                        # Display result
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            st.metric("Sentiment", result['sentiment'].upper())
+                        
+                        with col2:
+                            st.metric("Confidence", f"{result['confidence']:.2%}")
+                        
+                        with col3:
+                            st.metric("Label", result['label'])
+                        
+                        # Visual indicator
+                        sentiment_color = "sentiment-positive" if result['sentiment'] == "positive" else "sentiment-negative"
+                        st.markdown(f'<p class="{sentiment_color}">{result["sentiment"].upper()} sentiment detected</p>', 
+                                  unsafe_allow_html=True)
+                        
+                        # Progress bar
+                        st.progress(result['confidence'])
+                        
+                        # Add to history
+                        st.session_state.history.append({
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "text": text_input[:100] + "..." if len(text_input) > 100 else text_input,
+                            "sentiment": result['sentiment'],
+                            "confidence": result['confidence'],
+                            "label": result['label']
+                        })
+                        
+                    else:
+                        st.error(f"API Error: {response.status_code} - {response.text}")
+                        
+                except requests.exceptions.ConnectionError:
+                    st.error("❌ Could not connect to the API. Make sure the FastAPI server is running.")
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)}")
         else:
-            # Fallback pipeline
-            result = classifier(text)[0]
-            sentiment = "positive" if result['label'] == 'POSITIVE' else "negative"
-            confidence = result['score']
-            prediction = 1 if sentiment == "positive" else 0
-        
-        return SentimentResponse(
-            text=text,
-            sentiment=sentiment,
-            confidence=confidence,
-            label=prediction
-        )
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+            st.warning("⚠️ Please enter some text to analyze.")
 
-@app.get("/test")
-async def test_endpoint():
-    """Test endpoint with sample text"""
-    test_text = "I absolutely love this product!"
-    
-    try:
-        # Simulate prediction
-        return {
-            "test": "success",
-            "sample_text": test_text,
-            "expected_sentiment": "positive"
-        }
-    except Exception as e:
-        return {"test": "failed", "error": str(e)}
+with tab2:
+    if st.session_state.history:
+        # Convert history to DataFrame
+        df = pd.DataFrame(st.session_state.history)
+        
+        # Display table
+        st.dataframe(df, use_container_width=True)
+        
+        # Export options
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Export as CSV"):
+                csv = df.to_csv(index=False)
+                st.download_button(
+                    label="Download CSV",
+                    data=csv,
+                    file_name=f"sentiment_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
+        with col2:
+            if st.button("Export as JSON"):
+                json_str = df.to_json(orient='records', indent=2)
+                st.download_button(
+                    label="Download JSON",
+                    data=json_str,
+                    file_name=f"sentiment_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                    mime="application/json"
+                )
+    else:
+        st.info("No analysis history yet. Start analyzing text in the 'Analyze' tab.")
 
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+with tab3:
+    if st.session_state.history:
+        # Statistics
+        df = pd.DataFrame(st.session_state.history)
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Total Analyses", len(df))
+        
+        with col2:
+            positive_count = len(df[df['sentiment'] == 'positive'])
+            st.metric("Positive", positive_count)
+        
+        with col3:
+            negative_count = len(df[df['sentiment'] == 'negative'])
+            st.metric("Negative", negative_count)
+        
+        # Charts
+        st.subheader("📊 Sentiment Distribution")
+        fig1 = px.pie(df, names='sentiment', title='Sentiment Distribution')
+        st.plotly_chart(fig1, use_container_width=True)
+        
+        st.subheader("📈 Confidence Over Time")
+        df['timestamp_dt'] = pd.to_datetime(df['timestamp'])
+        df = df.sort_values('timestamp_dt')
+        fig2 = px.line(df, x='timestamp_dt', y='confidence', 
+                      color='sentiment', title='Confidence Trend')
+        st.plotly_chart(fig2, use_container_width=True)
+        
+        st.subheader("📋 Detailed Statistics")
+        st.write(df.describe())
+    else:
+        st.info("No data available for statistics yet.")
+
+# Footer
+st.divider()
+st.markdown("""
+<div style='text-align: center'>
+    <p>Built with ❤️ using Streamlit, FastAPI, and Transformers</p>
+    <p>API: {API_URL}</p>
+</div>
+""".format(API_URL=API_URL), unsafe_allow_html=True)
