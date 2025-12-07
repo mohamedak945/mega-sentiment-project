@@ -126,16 +126,18 @@ def get_embedding(text: str, tokenizer, model, device):
     return embedding.cpu().numpy()
 
 # ============================================
-# CALLBACK FUNCTIONS FOR EXAMPLE BUTTONS
+# CALLBACK FUNCTIONS FOR EXAMPLE BUTTONS - FIXED
 # ============================================
 
 def set_positive_example():
     """Callback for positive example button"""
     st.session_state.text_input = "This product is absolutely amazing! I've never been happier with a purchase. The quality is outstanding and it exceeded all my expectations."
+    st.rerun()  # ADD THIS LINE
 
 def set_negative_example():
     """Callback for negative example button"""
     st.session_state.text_input = "I'm very disappointed with this service. The quality is poor and it doesn't work as advertised. Would not recommend to anyone."
+    st.rerun()  # ADD THIS LINE
 
 # ============================================
 # MAIN APP
@@ -172,14 +174,14 @@ def main():
             key="analyze_btn"
         )
         
-        # EXAMPLE TEXTS
+        # EXAMPLE TEXTS - FIXED: Use callbacks properly
         with st.expander("Try Example Texts"):
             col_ex1, col_ex2 = st.columns(2)
             
             with col_ex1:
                 st.button(
                     "Positive Example",
-                    on_click=set_positive_example,
+                    on_click=set_positive_example,  # This will call the function
                     use_container_width=True,
                     key="btn_positive"
                 )
@@ -187,7 +189,7 @@ def main():
             with col_ex2:
                 st.button(
                     "Negative Example",
-                    on_click=set_negative_example,
+                    on_click=set_negative_example,  # This will call the function
                     use_container_width=True,
                     key="btn_negative"
                 )
