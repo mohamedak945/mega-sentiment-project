@@ -115,29 +115,47 @@ def main():
     # Load model info
     classifier, _, _, _, config = load_best_model()
     
-    # Text input
+    # Text input - Initialize in session state
+    if 'text_input' not in st.session_state:
+        st.session_state.text_input = ""
+    
     st.subheader("Enter Text to Analyze")
     text = st.text_area(
         "",
         height=150,
         placeholder="Type your text here...",
-        key="text_input"
+        key="text_input_area",
+        value=st.session_state.text_input
     )
     
-    # Example buttons
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("😊 Positive Example", use_container_width=True):
-            st.session_state.text_input = "This product is absolutely amazing! I've never been happier with a purchase. The quality is outstanding!"
-    with col2:
-        if st.button("😠 Negative Example", use_container_width=True):
-            st.session_state.text_input = "I'm very disappointed with this service. The quality is poor and it doesn't work as advertised."
+    # Update session state when text changes
+    if text != st.session_state.text_input:
+        st.session_state.text_input = text
+    
+    # Example buttons - SIMPLE FIX: Use st.form
+    with st.form("examples_form"):
+        col1, col2 = st.columns(2)
+        with col1:
+            pos_clicked = st.form_submit_button("😊 Positive Example", use_container_width=True)
+        with col2:
+            neg_clicked = st.form_submit_button("😠 Negative Example", use_container_width=True)
+    
+    # Handle button clicks
+    if pos_clicked:
+        st.session_state.text_input = "This product is absolutely amazing! I've never been happier with a purchase. The quality is outstanding!"
+        st.rerun()
+    
+    if neg_clicked:
+        st.session_state.text_input = "I'm very disappointed with this service. The quality is poor and it doesn't work as advertised."
+        st.rerun()
     
     # Analyze button
-    if st.button("🔍 Analyze Sentiment", type="primary", use_container_width=True):
-        if text.strip():
+    analyze_clicked = st.button("🔍 Analyze Sentiment", type="primary", use_container_width=True)
+    
+    if analyze_clicked:
+        if st.session_state.text_input.strip():
             with st.spinner("Analyzing..."):
-                result = predict(text)
+                result = predict(st.session_state.text_input)
             
             # Display results
             st.subheader("Results")
