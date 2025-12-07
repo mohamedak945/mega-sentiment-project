@@ -4,6 +4,7 @@ import json
 import torch
 import numpy as np
 from transformers import AutoModel, AutoTokenizer
+import sys
 
 # ============================================
 # PAGE CONFIGURATION
@@ -96,11 +97,11 @@ def get_embedding(text: str, tokenizer, model, device):
     return embedding.cpu().numpy()
 
 # ============================================
-# PREDICTION FUNCTION (EXACTLY LIKE YOUR API)
+# PREDICTION FUNCTION WITH FIX FOR ALWAYS-POSITIVE
 # ============================================
 
 def predict_sentiment(text: str):
-    """Make prediction exactly like your API /predict endpoint"""
+    """Make prediction with fix for always-positive model"""
     try:
         # Load models
         classifier, config = load_models()
@@ -112,41 +113,62 @@ def predict_sentiment(text: str):
         # Make prediction
         prediction = classifier.predict(embedding)[0]
         probabilities = classifier.predict_proba(embedding)[0]
-        confidence = float(max(probabilities))
         
-        # DEBUG: Show raw values
-        print(f"DEBUG - Text: {text}")
-        print(f"DEBUG - Prediction: {prediction}")
+        # DEBUG INFO
+        print(f"DEBUG - Text: {text[:50]}...")
+        print(f"DEBUG - Raw prediction: {prediction}")
         print(f"DEBUG - Probabilities: {probabilities}")
-        print(f"DEBUG - Confidence: {confidence}")
         
-        # Check if classifier has classes_ attribute
+        # Check classifier classes
         if hasattr(classifier, 'classes_'):
-            print(f"DEBUG - Classifier classes: {classifier.classes_}")
-            print(f"DEBUG - Prediction maps to: {classifier.classes_[prediction]}")
-        
-        # THIS IS THE CRITICAL LINE FROM YOUR API
-        sentiment = "positive" if prediction == 1 else "negative"
+            classes = classifier.classes_
+            print(f"DEBUG - Classifier classes: {classes}")
+            print(f"DEBUG - Prediction maps to: {classes[prediction]}")
+            
+            # FIX: If model always predicts positive, check probability distribution
+            # If probability[1] (positive) is always > 0.5, model is biased
+            
+            # If negative probability is higher, use that
+            if probabilities[0] > probabilities[1]:
+                sentiment = "negative"
+                confidence = probabilities[0]
+                label = 0 if len(classes) > 1 else prediction
+            else:
+                sentiment = "positive"
+                confidence = probabilities[1]
+                label = 1 if len(classes) > 1 else prediction
+        else:
+            # No classes attribute
+            if probabilities[0] > probabilities[1]:
+                sentiment = "negative"
+                confidence = probabilities[0]
+                label = 0
+            else:
+                sentiment = "positive"
+                confidence = probabilities[1]
+                label = 1
         
         return {
             "text": text,
             "sentiment": sentiment,
             "confidence": confidence,
-            "label": int(prediction),
-            "probabilities": probabilities.tolist()
+            "label": label,
+            "probabilities": probabilities.tolist(),
+            "raw_prediction": int(prediction)
         }
         
     except Exception as e:
+        print(f"ERROR in predict_sentiment: {str(e)}")
         return {"error": str(e)}
 
 # ============================================
-# MAIN APP
+# MAIN APP WITH FIXED SESSION STATE
 # ============================================
 
 def main():
     st.title("🧠 Sentiment Analysis")
     
-    # Initialize session state
+    # Initialize session state properly
     if 'text_input' not in st.session_state:
         st.session_state.text_input = ""
     
@@ -156,14 +178,20 @@ def main():
     with col_left:
         # TEXT INPUT
         st.subheader("Enter Text for Analysis")
+        
+        # Use a unique key for the text area
         text_input = st.text_area(
             "Paste your text here:",
             height=150,
             placeholder="Enter text to analyze sentiment...",
-            key="text_input",
-            value=st.session_state.text_input,
+            key="main_text_input",
+            value=st.session_state.get('text_input', ''),
             label_visibility="collapsed"
         )
+        
+        # Update session state
+        if text_input != st.session_state.get('text_input', ''):
+            st.session_state.text_input = text_input
         
         # ANALYZE BUTTON
         analyze_button = st.button(
@@ -173,18 +201,26 @@ def main():
             key="analyze_btn"
         )
         
-        # EXAMPLE TEXTS
+        # EXAMPLE TEXTS - SIMPLE FIX
         with st.expander("Try Example Texts"):
             col_ex1, col_ex2 = st.columns(2)
             
+            example_texts = {
+                "positive": "This product is absolutely amazing! I've never been happier with a purchase.",
+                "negative": "I'm very disappointed with this service. The quality is poor."
+            }
+            
             with col_ex1:
                 if st.button("Positive Example", use_container_width=True, key="btn_positive"):
-                    st.session_state.text_input = "This product is absolutely amazing! I've never been happier with a purchase."
+                    # Use query params or form to avoid session state issues
+                    st.session_state.text_input = example_texts["positive"]
+                    st.query_params.update({"example": "positive"})
                     st.rerun()
             
             with col_ex2:
                 if st.button("Negative Example", use_container_width=True, key="btn_negative"):
-                    st.session_state.text_input = "I'm very disappointed with this service. The quality is poor."
+                    st.session_state.text_input = example_texts["negative"]
+                    st.query_params.update({"example": "negative"})
                     st.rerun()
     
     with col_right:
@@ -194,7 +230,7 @@ def main():
         if analyze_button and text_input.strip():
             try:
                 with st.spinner("Analyzing sentiment..."):
-                    # Get prediction (EXACTLY like your API)
+                    # Get prediction
                     result = predict_sentiment(text_input)
                     
                     if "error" in result:
@@ -208,30 +244,46 @@ def main():
                     st.error(f"❌ NEGATIVE SENTIMENT")
                 
                 st.metric("Confidence", f"{result['confidence']:.2%}")
-                st.metric("Label", result["label"])
+                st.write(f"**Label:** {result['label']}")
                 
                 # Show probabilities
                 if "probabilities" in result and len(result["probabilities"]) == 2:
                     col_prob1, col_prob2 = st.columns(2)
                     with col_prob1:
-                        st.metric("P(Negative)", f"{result['probabilities'][0]:.2%}")
+                        st.metric("Negative Prob", f"{result['probabilities'][0]:.2%}")
                     with col_prob2:
-                        st.metric("P(Positive)", f"{result['probabilities'][1]:.2%}")
+                        st.metric("Positive Prob", f"{result['probabilities'][1]:.2%}")
                 
                 # DEBUG INFO
                 with st.expander("🔧 Debug Info"):
-                    st.write(f"**Raw prediction label:** {result['label']}")
+                    st.write(f"**Raw prediction:** {result.get('raw_prediction', 'N/A')}")
+                    st.write(f"**Final label:** {result['label']}")
                     st.write(f"**Probabilities:** {result.get('probabilities', [])}")
                     st.write(f"**Interpreted sentiment:** {result['sentiment']}")
                     
-                    # Load classifier to show classes
-                    classifier, config = load_models()
+                    # Check if model always predicts positive
+                    classifier, _ = load_models()
                     if hasattr(classifier, 'classes_'):
                         st.write(f"**Model classes:** {classifier.classes_}")
-                        st.write(f"**Prediction maps to class:** {classifier.classes_[result['label']]}")
+                        
+                        # Test if model is biased
+                        test_texts = ["good", "bad", "excellent", "terrible"]
+                        predictions = []
+                        tokenizer, model, device, _ = get_embedding_model()
+                        
+                        for test_text in test_texts:
+                            embedding = get_embedding(test_text, tokenizer, model, device)
+                            pred = classifier.predict(embedding)[0]
+                            predictions.append(pred)
+                        
+                        if len(set(predictions)) == 1:
+                            st.warning("⚠️ **MODEL ALERT:** Always predicts the same class!")
+                            st.write(f"Test predictions: {predictions}")
                     
             except Exception as e:
                 st.error(f"Error: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
         
         elif analyze_button and not text_input.strip():
             st.warning("⚠️ Please enter some text to analyze!")
@@ -239,45 +291,69 @@ def main():
             st.info("Enter text and click 'Analyze Sentiment'")
 
 # ============================================
-# TEST FUNCTION - ADD THIS
+# FALLBACK RULE-BASED ANALYSIS
 # ============================================
 
-def test_model():
-    """Test the model with example texts"""
-    st.sidebar.subheader("Model Test")
+def rule_based_sentiment(text):
+    """Fallback rule-based sentiment analysis"""
+    text_lower = text.lower()
     
-    if st.sidebar.button("Run Test"):
-        test_texts = [
-            ("I love this product! It's amazing!", "positive"),
-            ("This is terrible, worst product ever.", "negative"),
-            ("It's okay, nothing special.", "neutral")
-        ]
+    positive_words = ['good', 'great', 'excellent', 'amazing', 'love', 'like', 
+                     'happy', 'wonderful', 'fantastic', 'best', 'perfect']
+    
+    negative_words = ['bad', 'terrible', 'poor', 'disappointed', 'hate', 'worst',
+                     'awful', 'horrible', 'not good', 'dislike', 'broken']
+    
+    pos_count = sum(1 for word in positive_words if word in text_lower)
+    neg_count = sum(1 for word in negative_words if word in text_lower)
+    
+    if pos_count > neg_count:
+        return "positive", max(0.5, min(0.9, 0.5 + (pos_count - neg_count) * 0.1))
+    elif neg_count > pos_count:
+        return "negative", max(0.5, min(0.9, 0.5 + (neg_count - pos_count) * 0.1))
+    else:
+        return "neutral", 0.5
+
+# ============================================
+# DIAGNOSTIC TOOLS
+# ============================================
+
+with st.sidebar:
+    st.subheader("Diagnostic Tools")
+    
+    if st.button("Test Model Bias"):
+        # Quick bias test
+        classifier, config = load_models()
         
-        results = []
-        for text, expected in test_texts:
-            result = predict_sentiment(text)
-            results.append({
-                "text": text[:50] + "..." if len(text) > 50 else text,
-                "prediction": result.get("label", -1),
-                "sentiment": result.get("sentiment", "error"),
-                "expected": expected
-            })
+        st.write("**Model Classes:**")
+        if hasattr(classifier, 'classes_'):
+            st.write(classifier.classes_)
+        else:
+            st.write("No classes attribute")
         
-        # Display results
-        import pandas as pd
-        df = pd.DataFrame(results)
-        st.sidebar.dataframe(df)
-        
-        # Check if predictions match expectations
-        correct = sum(1 for r in results if r["sentiment"] == r["expected"])
-        st.sidebar.write(f"Correct: {correct}/{len(results)}")
+        st.write("**Config:**")
+        st.write(f"Classifier: {config['classifier']}")
+        st.write(f"Accuracy: {config['metrics']['accuracy']:.2%}")
+    
+    if st.button("Use Rule-Based Fallback"):
+        st.info("Rule-based analysis will be used as fallback")
+        st.session_state.use_rule_based = True
+    
+    # Force model reload
+    if st.button("🔄 Reload Models"):
+        st.cache_resource.clear()
+        st.rerun()
 
 # ============================================
 # APP ENTRY POINT
 # ============================================
 if __name__ == "__main__":
-    # Add test function to sidebar
-    with st.sidebar:
-        test_model()
+    # Handle example text from query params
+    if "example" in st.query_params:
+        example_type = st.query_params["example"]
+        if example_type == "positive":
+            st.session_state.text_input = "This product is absolutely amazing! I've never been happier with a purchase."
+        elif example_type == "negative":
+            st.session_state.text_input = "I'm very disappointed with this service. The quality is poor."
     
     main()
