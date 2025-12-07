@@ -1,248 +1,223 @@
-# single_app.py - Streamlit app that calls the FastAPI service
+# single_app.py - All-in-one Streamlit app
 import streamlit as st
-import requests
+import joblib
 import json
-import pandas as pd
-import plotly.express as px
-from datetime import datetime
-import time
+import torch
+import numpy as np
+from transformers import AutoModel, AutoTokenizer
 
-# Page configuration
+# Page config
 st.set_page_config(
-    page_title="Sentiment Analysis Dashboard",
+    page_title="Sentiment Analyzer",
     page_icon="😊",
-    layout="wide"
+    layout="centered"
 )
 
-# Custom CSS
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.5rem;
-        color: #1f77b4;
-        text-align: center;
-        margin-bottom: 2rem;
+@st.cache_resource
+def load_models():
+    """Load models once and cache them"""
+    try:
+        # Load config
+        with open('artifacts/models/best_model_info.json', 'r') as f:
+            config = json.load(f)
+        
+        # Load classifier
+        model_path = f"artifacts/models/{config['embedding_model']}_{config['classifier']}.joblib"
+        classifier = joblib.load(model_path)
+        
+        st.success(f"✅ Model loaded: {config['classifier']} on {config['embedding_model']}")
+        return config, classifier
+    except Exception as e:
+        st.error(f"❌ Error loading models: {e}")
+        return None, None
+
+@st.cache_resource
+def get_embedding_model(model_name='xlm-roberta-base'):
+    """Load transformer model"""
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModel.from_pretrained(model_name)
+    
+    # Device selection
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+    
+    model.to(device)
+    model.eval()
+    
+    return tokenizer, model, device
+
+def predict_sentiment(text, tokenizer, model, device, classifier):
+    """Predict sentiment for a single text"""
+    # Tokenize
+    inputs = tokenizer(
+        text,
+        max_length=256,
+        padding='max_length',
+        truncation=True,
+        return_tensors='pt'
+    )
+    
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+    
+    # Get embedding
+    with torch.no_grad():
+        outputs = model(**inputs)
+        embedding = outputs.last_hidden_state.mean(dim=1)
+    
+    embedding_np = embedding.cpu().numpy()
+    
+    # Predict
+    prediction = classifier.predict(embedding_np)[0]
+    probabilities = classifier.predict_proba(embedding_np)[0]
+    confidence = float(max(probabilities))
+    
+    sentiment = "positive" if prediction == 1 else "negative"
+    
+    return sentiment, confidence, prediction
+
+# Main app
+def main():
+    st.title("Sentiment Analyzer")
+    st.markdown("---")
+    
+    # Model mapping
+    model_mapping = {
+        'bert': 'bert-base-uncased',
+        'distilbert': 'distilbert-base-uncased',
+        'xlmr': 'xlm-roberta-base'
     }
-    .sentiment-positive {
-        color: green;
-        font-weight: bold;
-    }
-    .sentiment-negative {
-        color: red;
-        font-weight: bold;
-    }
-    .stButton>button {
-        width: 100%;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# Title
-st.markdown('<h1 class="main-header">📊 Sentiment Analysis Dashboard</h1>', unsafe_allow_html=True)
-
-# API Configuration
-API_URL = st.secrets.get("API_URL", "http://localhost:8000")  # Change this in production
-
-# Initialize session state
-if 'history' not in st.session_state:
-    st.session_state.history = []
-if 'api_status' not in st.session_state:
-    st.session_state.api_status = None
-
-# Sidebar
-with st.sidebar:
-    st.title("⚙️ Configuration")
     
-    # API Health Check
-    st.subheader("API Status")
-    if st.button("Check API Health"):
-        try:
-            response = requests.get(f"{API_URL}/health", timeout=5)
-            if response.status_code == 200:
-                st.session_state.api_status = "✅ API is healthy"
-            else:
-                st.session_state.api_status = "❌ API is not responding"
-        except Exception as e:
-            st.session_state.api_status = f"❌ Connection failed: {str(e)}"
+    # Load models
+    with st.spinner("Loading models..."):
+        config, classifier = load_models()
+        
+    if config is None or classifier is None:
+        st.error("Failed to load models. Please check the model files.")
+        return
     
-    if st.session_state.api_status:
-        st.info(st.session_state.api_status)
+    # Embedding model name
+    embedding_name = model_mapping.get(config['embedding_model'], 'xlm-roberta-base')
     
-    # Clear history
-    if st.button("Clear History"):
-        st.session_state.history = []
-        st.rerun()
+    # Load transformer model
+    with st.spinner(f"Loading {embedding_name}..."):
+        tokenizer, model, device = get_embedding_model(embedding_name)
     
-    st.divider()
-    
-    # About section
-    st.subheader("ℹ️ About")
-    st.info("""
-    This dashboard analyzes sentiment using:
-    - 🤖 Transformer models (XLMR)
-    - 📊 CatBoost classifier
-    - ⚡ FastAPI backend
-    """)
-
-# Main content
-tab1, tab2, tab3 = st.tabs(["🔍 Analyze", "📈 History", "📊 Statistics"])
-
-with tab1:
-    # Text input
-    col1, col2 = st.columns([3, 1])
-    
-    with col1:
-        text_input = st.text_area(
-            "Enter text to analyze:",
-            placeholder="Type or paste your text here...",
-            height=150
-        )
-    
-    with col2:
-        st.markdown("### Examples")
+    # Sidebar info
+    with st.sidebar:
+        st.header("📊 Model Info")
+        st.write(f"**Classifier:** {config['classifier']}")
+        st.write(f"**Embedding Model:** {config['embedding_model']}")
+        st.write(f"**Accuracy:** {config['metrics']['accuracy']:.4f}")
+        st.write(f"**Device:** {device}")
+        st.markdown("---")
+        
+        # Examples
+        st.subheader("📝 Try These Examples:")
         examples = [
-            "I love this product! It's amazing!",
-            "This is the worst experience I've ever had.",
+            "I absolutely love this product!",
+            "This is the worst experience ever.",
             "The service was okay, nothing special.",
-            "Absolutely terrible customer support!"
+            "Amazing customer support!",
+            "Terrible quality, would not recommend."
         ]
         
         for example in examples:
-            if st.button(example[:40] + "..." if len(example) > 40 else example, 
-                        key=f"example_{examples.index(example)}"):
+            if st.button(example, key=f"ex_{example[:10]}"):
                 st.session_state.example_text = example
-                st.rerun()
     
-    # If example was clicked
-    if 'example_text' in st.session_state:
-        text_input = st.session_state.example_text
-        del st.session_state.example_text
+    # Text input
+    text = st.text_area(
+        "Enter text to analyze:",
+        value=st.session_state.get('example_text', 'I love this product!'),
+        height=100
+    )
     
     # Analyze button
     if st.button("🚀 Analyze Sentiment", type="primary"):
-        if text_input:
-            with st.spinner("Analyzing sentiment..."):
+        if text.strip():
+            with st.spinner("Analyzing..."):
                 try:
-                    # Call FastAPI
-                    response = requests.post(
-                        f"{API_URL}/predict",
-                        json={"text": text_input},
-                        timeout=10
+                    sentiment, confidence, label = predict_sentiment(
+                        text, tokenizer, model, device, classifier
                     )
                     
-                    if response.status_code == 200:
-                        result = response.json()
+                    # Display results
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        if sentiment == "positive":
+                            st.success(f"😊 **POSITIVE**")
+                        else:
+                            st.error(f"😞 **NEGATIVE**")
+                    
+                    with col2:
+                        st.metric("Confidence", f"{confidence:.2%}")
+                    
+                    # Progress bar
+                    st.progress(confidence)
+                    
+                    # Additional info
+                    with st.expander("📋 Details"):
+                        st.write(f"**Text:** {text}")
+                        st.write(f"**Sentiment:** {sentiment}")
+                        st.write(f"**Label:** {label}")
+                        st.write(f"**Confidence Score:** {confidence:.4f}")
                         
-                        # Display result
-                        col1, col2, col3 = st.columns(3)
-                        
-                        with col1:
-                            st.metric("Sentiment", result['sentiment'].upper())
-                        
-                        with col2:
-                            st.metric("Confidence", f"{result['confidence']:.2%}")
-                        
-                        with col3:
-                            st.metric("Label", result['label'])
-                        
-                        # Visual indicator
-                        sentiment_color = "sentiment-positive" if result['sentiment'] == "positive" else "sentiment-negative"
-                        st.markdown(f'<p class="{sentiment_color}">{result["sentiment"].upper()} sentiment detected</p>', 
-                                  unsafe_allow_html=True)
-                        
-                        # Progress bar
-                        st.progress(result['confidence'])
-                        
-                        # Add to history
-                        st.session_state.history.append({
-                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            "text": text_input[:100] + "..." if len(text_input) > 100 else text_input,
-                            "sentiment": result['sentiment'],
-                            "confidence": result['confidence'],
-                            "label": result['label']
-                        })
-                        
-                    else:
-                        st.error(f"API Error: {response.status_code} - {response.text}")
-                        
-                except requests.exceptions.ConnectionError:
-                    st.error("❌ Could not connect to the API. Make sure the FastAPI server is running.")
                 except Exception as e:
-                    st.error(f"❌ Error: {str(e)}")
+                    st.error(f"Error during prediction: {str(e)}")
         else:
-            st.warning("⚠️ Please enter some text to analyze.")
+            st.warning("Please enter some text to analyze.")
+    
+    # Batch analysis
+    st.markdown("---")
+    st.subheader("📁 Batch Analysis")
+    
+    batch_text = st.text_area(
+        "Enter multiple texts (one per line):",
+        height=150,
+        placeholder="I love it!\nThis is terrible.\nIt's okay."
+    )
+    
+    if st.button("📊 Analyze Batch"):
+        if batch_text.strip():
+            texts = [line.strip() for line in batch_text.split('\n') if line.strip()]
+            
+            results = []
+            progress_bar = st.progress(0)
+            
+            for i, text_line in enumerate(texts):
+                try:
+                    sentiment, confidence, label = predict_sentiment(
+                        text_line, tokenizer, model, device, classifier
+                    )
+                    results.append({
+                        "Text": text_line[:50] + "..." if len(text_line) > 50 else text_line,
+                        "Sentiment": sentiment,
+                        "Confidence": f"{confidence:.2%}",
+                        "Label": label
+                    })
+                except:
+                    results.append({
+                        "Text": text_line[:50] + "...",
+                        "Sentiment": "Error",
+                        "Confidence": "N/A",
+                        "Label": "N/A"
+                    })
+                
+                progress_bar.progress((i + 1) / len(texts))
+            
+            # Display results
+            st.dataframe(results)
+            
+            # Summary
+            positive_count = sum(1 for r in results if r["Sentiment"] == "positive")
+            st.info(f"📈 **Summary:** {positive_count} positive, {len(results)-positive_count} negative")
+        else:
+            st.warning("Please enter some text for batch analysis.")
 
-with tab2:
-    if st.session_state.history:
-        # Convert history to DataFrame
-        df = pd.DataFrame(st.session_state.history)
-        
-        # Display table
-        st.dataframe(df, use_container_width=True)
-        
-        # Export options
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Export as CSV"):
-                csv = df.to_csv(index=False)
-                st.download_button(
-                    label="Download CSV",
-                    data=csv,
-                    file_name=f"sentiment_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv"
-                )
-        with col2:
-            if st.button("Export as JSON"):
-                json_str = df.to_json(orient='records', indent=2)
-                st.download_button(
-                    label="Download JSON",
-                    data=json_str,
-                    file_name=f"sentiment_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                    mime="application/json"
-                )
-    else:
-        st.info("No analysis history yet. Start analyzing text in the 'Analyze' tab.")
-
-with tab3:
-    if st.session_state.history:
-        # Statistics
-        df = pd.DataFrame(st.session_state.history)
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric("Total Analyses", len(df))
-        
-        with col2:
-            positive_count = len(df[df['sentiment'] == 'positive'])
-            st.metric("Positive", positive_count)
-        
-        with col3:
-            negative_count = len(df[df['sentiment'] == 'negative'])
-            st.metric("Negative", negative_count)
-        
-        # Charts
-        st.subheader("📊 Sentiment Distribution")
-        fig1 = px.pie(df, names='sentiment', title='Sentiment Distribution')
-        st.plotly_chart(fig1, use_container_width=True)
-        
-        st.subheader("📈 Confidence Over Time")
-        df['timestamp_dt'] = pd.to_datetime(df['timestamp'])
-        df = df.sort_values('timestamp_dt')
-        fig2 = px.line(df, x='timestamp_dt', y='confidence', 
-                      color='sentiment', title='Confidence Trend')
-        st.plotly_chart(fig2, use_container_width=True)
-        
-        st.subheader("📋 Detailed Statistics")
-        st.write(df.describe())
-    else:
-        st.info("No data available for statistics yet.")
-
-# Footer
-st.divider()
-st.markdown("""
-<div style='text-align: center'>
-    <p>Built with ❤️ using Streamlit, FastAPI, and Transformers</p>
-    <p>API: {API_URL}</p>
-</div>
-""".format(API_URL=API_URL), unsafe_allow_html=True)
+if __name__ == "__main__":
+    main()
