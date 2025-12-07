@@ -52,4 +52,4 @@ rich==13.7.0
 
 # Optional
 safetensors==0.4.1
-huggingface-hub==0.20.2
+huggingface-hub>=0.16.4,<1.0
