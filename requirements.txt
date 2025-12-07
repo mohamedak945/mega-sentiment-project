@@ -145,7 +145,7 @@ SQLAlchemy @ file:///private/var/folders/k1/30mswbxs7r1g6zwn8y4fyt500000gp/T/abs
 sqlparse @ file:///opt/miniconda3/conda-bld/sqlparse_1764240029253/work
 stack_data @ file:///opt/miniconda3/conda-bld/stack_data_1757067040463/work
 starlette @ file:///opt/miniconda3/conda-bld/starlette-recipe_1756910684149/work
-streamlit @ file:///home/conda/feedstock_root/build_artifacts/streamlit_1764839361391/work
+streamlit==1.28.1
 sympy==1.14.0
 tenacity @ file:///opt/miniconda3/conda-bld/tenacity_1760375527847/work
 threadpoolctl @ file:///private/var/folders/nz/j6p8yfhx1mv_0grj5xl4650h0000gp/T/abs_18rgexrkuo/croot/threadpoolctl_1731006101562/work
